@@ -1,0 +1,37 @@
+TEACHMATE SUPER ADMIN RULES — REVIEW BEFORE MERGING
+
+Do not blindly replace your production Firestore rules with this file. Merge these concepts into the existing ruleset and test all app flows. Firestore allow rules are additive: a broader existing allow rule can override the restriction below.
+
+1) Use the same helper (or equivalent) to verify the signed-in user has a manually created marker:
+
+function isSuperAdmin() {
+  return request.auth != null
+    && exists(/databases/$(database)/documents/superAdmins/$(request.auth.uid));
+}
+
+2) Within match /institutions/{id}, permit Super Admin reads and subscription-only updates. Ensure the institution owner's ordinary update rule cannot change subscription fields:
+
+allow read: if isSuperAdmin() || <your existing authorized read conditions>;
+allow update: if isSuperAdmin()
+  && request.resource.data.institutionId == resource.data.institutionId
+  && request.resource.data.ownerUid == resource.data.ownerUid
+  && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+    'subscriptionStatus', 'subscriptionPlan', 'subscriptionExpiresAt',
+    'lastPaymentReference', 'lastPaymentVerifiedAt', 'lastPaymentVerifiedBy', 'updatedAt'
+  ]);
+
+3) Add this root-level audit collection rule inside match /databases/{database}/documents:
+
+match /subscriptionAudit/{entryId} {
+  allow read: if isSuperAdmin();
+  allow create: if isSuperAdmin()
+    && request.resource.data.performedBy == request.auth.uid
+    && request.resource.data.institutionId is string
+    && request.resource.data.action in ['activated', 'renewed', 'deactivated'];
+  allow update, delete: if false;
+}
+
+4) Marker documents must only be created/deleted manually by the Firebase project owner in Firebase Console. Do not allow app clients to write /superAdmins documents.
+5) Keep students' own sign-in and data permissions separate from institution subscription gating as required by the current app.
+
+Important: this is a reference patch, not a complete rules file. Preserve all existing required matches and test registration, institute login, student login, student records, activation, renewal, deactivation and audit writes using the Rules Playground or Emulator before deployment.
